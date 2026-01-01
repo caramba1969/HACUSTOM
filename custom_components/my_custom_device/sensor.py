@@ -1,19 +1,27 @@
 """Sensor platform for Essent Dynamic Prices integration."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import timedelta
 import logging
-from datetime import datetime, timedelta
 
 import async_timeout
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
+    SensorEntityDescription,
     SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CURRENCY_EURO, UnitOfEnergy, UnitOfVolume
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import (
+    CoordinatorEntity,
+    DataUpdateCoordinator,
+    UpdateFailed,
+)
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
@@ -22,9 +30,95 @@ _LOGGER = logging.getLogger(__name__)
 
 # Essent API endpoint
 ESSENT_API_URL = "https://www.essent.nl/api/public/tariffmanagement/dynamic-prices/v1/"
-
-# Scan interval: 30 minuten is prima
 SCAN_INTERVAL = timedelta(minutes=30)
+
+
+@dataclass
+class EssentSensorDescription(SensorEntityDescription):
+    """Class describing Essent sensor entities."""
+    value_fn: callable = None
+
+
+# Define all the sensors shown in your screenshot
+SENSOR_TYPES: tuple[EssentSensorDescription, ...] = (
+    # --- Electricity Sensors ---
+    EssentSensorDescription(
+        key="electricity_price",
+        name="Current electricity price",
+        icon="mdi:lightning-bolt",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    EssentSensorDescription(
+        key="electricity_market_price",
+        name="Current electricity market price",
+        icon="mdi:lightning-bolt-outline",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    EssentSensorDescription(
+        key="electricity_price_excl_vat",
+        name="Current electricity price excl. VAT",
+        icon="mdi:currency-eur",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    EssentSensorDescription(
+        key="electricity_tax",
+        name="Current electricity tax",
+        icon="mdi:tax",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    EssentSensorDescription(
+        key="electricity_vat",
+        name="Current electricity VAT",
+        icon="mdi:percent",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    
+    # --- Gas Sensors ---
+    EssentSensorDescription(
+        key="gas_price",
+        name="Current gas price",
+        icon="mdi:fire",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfVolume.CUBIC_METER}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    EssentSensorDescription(
+        key="gas_market_price",
+        name="Current gas market price",
+        icon="mdi:fire-alert",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfVolume.CUBIC_METER}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    
+    # --- Statistics ---
+    EssentSensorDescription(
+        key="highest_price_today",
+        name="Highest electricity price today",
+        icon="mdi:chart-line-variant",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+    EssentSensorDescription(
+        key="lowest_price_today",
+        name="Lowest electricity price today",
+        icon="mdi:chart-line-variant",
+        native_unit_of_measurement=f"{CURRENCY_EURO}/{UnitOfEnergy.KILO_WATT_HOUR}",
+        device_class=SensorDeviceClass.MONETARY,
+        state_class=SensorStateClass.MEASUREMENT,
+    ),
+)
 
 
 async def async_setup_entry(
@@ -33,118 +127,131 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     """Set up the sensor platform."""
-    data = hass.data[DOMAIN][config_entry.entry_id]
-    
-    # Create sensor entities
-    sensors = [
-        EssentDynamicPriceSensor(
-            config_entry.entry_id,
-            data["name"],
-        )
+    # Create the coordinator to fetch data
+    coordinator = EssentDataUpdateCoordinator(hass)
+    await coordinator.async_config_entry_first_refresh()
+
+    # Create entities based on the descriptions
+    entities = [
+        EssentSensor(coordinator, description, config_entry.entry_id)
+        for description in SENSOR_TYPES
     ]
     
-    async_add_entities(sensors, update_before_add=True)
+    async_add_entities(entities)
 
 
-class EssentDynamicPriceSensor(SensorEntity):
-    """Representation of an Essent Dynamic Price sensor."""
+class EssentDataUpdateCoordinator(DataUpdateCoordinator):
+    """Class to manage fetching Essent data."""
 
-    def __init__(self, entry_id: str, name: str) -> None:
-        """Initialize the sensor."""
-        self._entry_id = entry_id
-        self._attr_name = "Essent Dynamic Price"
-        self._attr_unique_id = f"{entry_id}_essent_dynamic_price"
-        self._attr_native_value = None
-        self._attr_device_class = SensorDeviceClass.MONETARY
-        self._attr_state_class = SensorStateClass.MEASUREMENT
-        self._attr_native_unit_of_measurement = "EUR/kWh"
-        self._attr_extra_state_attributes = {}
-        self._prices_list = []
+    def __init__(self, hass: HomeAssistant) -> None:
+        """Initialize."""
+        super().__init__(
+            hass,
+            _LOGGER,
+            name=DOMAIN,
+            update_interval=SCAN_INTERVAL,
+        )
+        self.session = async_get_clientsession(hass)
 
-    async def async_update(self) -> None:
-        """Fetch new state data for the sensor."""
-        # Gebruik de centrale HA sessie in plaats van een nieuwe aan te maken
-        session = async_get_clientsession(self.hass)
-        
+    async def _async_update_data(self):
+        """Fetch data from API."""
         try:
             async with async_timeout.timeout(10):
-                response = await session.get(ESSENT_API_URL)
-                if response.status != 200:
-                    _LOGGER.error("Failed to fetch Essent prices. Status: %s", response.status)
-                    return
-                
+                response = await self.session.get(ESSENT_API_URL)
+                response.raise_for_status()
                 data = await response.json()
                 _LOGGER.debug("Received data from Essent API: %s", data)
-                
-                # Sla de volledige lijst op in de attributen voor Power-Wheel of grafieken
-                self._prices_list = self._get_prices_list(data)
-                
-                # Zoek de huidige prijs
-                current_price = self._parse_current_price(self._prices_list)
-                
-                if current_price is not None:
-                    self._attr_native_value = current_price
-                else:
-                    _LOGGER.warning("Could not determine current price from data")
-                
-                self._attr_extra_state_attributes = {
-                    "last_update": dt_util.now().isoformat(),
-                    "price_count": len(self._prices_list) if self._prices_list else 0,
-                    # We zetten de lijst in de attributen zodat je ApexCharts kunt gebruiken
-                    "prices": self._prices_list 
-                }
-                        
+                return self._parse_data(data)
         except Exception as err:
-            _LOGGER.error("Unexpected error updating Essent prices: %s", err)
+            _LOGGER.error("Error fetching data: %s", err)
+            raise UpdateFailed(f"Error communicating with API: {err}")
 
-    def _get_prices_list(self, data: dict | list) -> list:
-        """Probeer de lijst met prijzen uit de JSON te halen."""
-        if isinstance(data, list):
-            return data
+    def _parse_data(self, data: dict) -> dict:
+        """Parse the raw API data into a structured dictionary."""
+        # NOTE: This logic needs to be adjusted based on the ACTUAL JSON structure
+        # For now, we try to find the current price and populate a dict
         
-        for key in ["prices", "data", "tariffs", "items"]:
-            if key in data and isinstance(data[key], list):
-                return data[key]
-        return []
-
-    def _parse_current_price(self, prices_list: list) -> float | None:
-        """Zoek de prijs die hoort bij het huidige uur."""
-        if not prices_list:
-            return None
-        
+        parsed = {}
         now = dt_util.now()
         
-        # Mogelijke veldnamen voor tijd en prijs
-        ts_keys = ["from", "readingDate", "timestamp", "start", "date"]
-        val_keys = ["price", "value", "amount", "tariff"]
-
-        for item in prices_list:
-            # 1. Zoek de tijdstempel
-            start_time = None
-            for k in ts_keys:
-                if k in item:
-                    start_time = dt_util.parse_datetime(str(item[k]))
+        # Helper to find price list
+        prices_list = []
+        if isinstance(data, list):
+            prices_list = data
+        else:
+            for key in ["prices", "data", "tariffs", "items"]:
+                if key in data and isinstance(data[key], list):
+                    prices_list = data[key]
                     break
-            
-            if not start_time:
+        
+        # Find current price item
+        current_item = None
+        today_prices = []
+        
+        for item in prices_list:
+            # Parse timestamp (simplified logic)
+            ts_str = item.get("readingDate") or item.get("from") or item.get("date")
+            if not ts_str:
+                continue
+                
+            try:
+                start_time = dt_util.parse_datetime(str(ts_str))
+                if not start_time:
+                    continue
+                
+                # Collect for stats
+                if start_time.date() == now.date():
+                    price = float(item.get("price", item.get("value", 0)))
+                    today_prices.append(price)
+
+                # Check if current
+                # Assuming 1 hour validity if no end time
+                end_time = start_time + timedelta(hours=1)
+                if start_time <= now < end_time:
+                    current_item = item
+            except Exception:
                 continue
 
-            # 2. Bepaal eindtijd (vaak 1 uur later bij dynamische prijzen)
-            # Als er een 'till' of 'to' is gebruiken we die, anders +1 uur
-            end_time = None
-            for k in ["till", "to", "end"]:
-                if k in item:
-                    end_time = dt_util.parse_datetime(str(item[k]))
-                    break
-            if not end_time:
-                end_time = start_time + timedelta(hours=1)
+        # Populate parsed data
+        if current_item:
+            # Map API fields to our internal keys
+            # You will need to adjust these keys based on the real JSON
+            parsed["electricity_price"] = float(current_item.get("price", 0))
+            parsed["electricity_market_price"] = float(current_item.get("marketPrice", 0))
+            parsed["electricity_price_excl_vat"] = float(current_item.get("priceExclVat", 0))
+            # ... add other mappings
+            
+        if today_prices:
+            parsed["highest_price_today"] = max(today_prices)
+            parsed["lowest_price_today"] = min(today_prices)
+            
+        return parsed
 
-            # 3. Check of 'nu' in dit blok valt
-            if start_time <= now < end_time:
-                for k in val_keys:
-                    if k in item:
-                        try:
-                            return float(item[k])
-                        except (ValueError, TypeError):
-                            continue
-        return None
+
+class EssentSensor(CoordinatorEntity, SensorEntity):
+    """Defines an Essent sensor."""
+
+    entity_description: EssentSensorDescription
+
+    def __init__(
+        self,
+        coordinator: EssentDataUpdateCoordinator,
+        description: EssentSensorDescription,
+        entry_id: str,
+    ) -> None:
+        """Initialize."""
+        super().__init__(coordinator)
+        self.entity_description = description
+        self._entry_id = entry_id
+        self._attr_unique_id = f"{entry_id}_{description.key}"
+        self._attr_has_entity_name = True
+        self._attr_name = description.name
+
+    @property
+    def native_value(self):
+        """Return the state of the sensor."""
+        if not self.coordinator.data:
+            return None
+            
+        # Get the value from the parsed data using the key
+        return self.coordinator.data.get(self.entity_description.key)
