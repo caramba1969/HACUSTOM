@@ -1,13 +1,13 @@
 {
   "domain": "my_custom_device",
-  "name": "My Custom Device",
+  "name": "Essent Dynamic Prices",
   "codeowners": ["@caramba1969"],
   "config_flow": true,
   "dependencies": [],
   "documentation": "https://github.com/caramba1969/HACUSTOM",
-  "integration_type": "device",
-  "iot_class": "local_polling",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
   "issue_tracker": "https://github.com/caramba1969/HACUSTOM/issues",
   "requirements": [],
-  "version": "1.0.4"
+  "version": "1.0.5"
 }

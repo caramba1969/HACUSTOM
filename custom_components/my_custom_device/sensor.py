@@ -10,8 +10,13 @@ from homeassistant.components.sensor import (
     SensorEntity,
     SensorStateClass,
 )
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
+
+from .const import DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -21,18 +26,34 @@ ESSENT_API_URL = "https://www.essent.nl/api/public/tariffmanagement/dynamic-pric
 # Scan interval: 30 minuten is prima
 SCAN_INTERVAL = timedelta(minutes=30)
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    """Set up the sensor platform via YAML."""
-    _LOGGER.info("Setting up Essent Sensor via YAML")
-    async_add_entities([EssentDynamicPriceSensor()], True)
+
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up the sensor platform."""
+    data = hass.data[DOMAIN][config_entry.entry_id]
+    
+    # Create sensor entities
+    sensors = [
+        EssentDynamicPriceSensor(
+            config_entry.entry_id,
+            data["name"],
+        )
+    ]
+    
+    async_add_entities(sensors, update_before_add=True)
+
 
 class EssentDynamicPriceSensor(SensorEntity):
     """Representation of an Essent Dynamic Price sensor."""
 
-    def __init__(self) -> None:
+    def __init__(self, entry_id: str, name: str) -> None:
         """Initialize the sensor."""
+        self._entry_id = entry_id
         self._attr_name = "Essent Dynamic Price"
-        self._attr_unique_id = "essent_dynamic_price_sensor_yaml"
+        self._attr_unique_id = f"{entry_id}_essent_dynamic_price"
         self._attr_native_value = None
         self._attr_device_class = SensorDeviceClass.MONETARY
         self._attr_state_class = SensorStateClass.MEASUREMENT

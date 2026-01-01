@@ -2,17 +2,14 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to My Custom Device",
-        "description": "Set up your My Custom Device integration",
+        "title": "Connect to Essent Dynamic Prices",
+        "description": "Set up your Essent Dynamic Prices integration",
         "data": {
-          "name": "Name",
-          "host": "Host",
-          "port": "Port"
+          "name": "Name"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect, please check your settings",
       "unknown": "Unexpected error occurred"
     },
     "abort": {
