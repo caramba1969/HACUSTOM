@@ -3,5 +3,6 @@
   "content_in_root": false,
   "filename": "my_custom_device",
   "render_readme": true,
+  "hide_default_branch": true,
   "homeassistant": "2023.1.0"
 }
